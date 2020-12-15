@@ -10,6 +10,8 @@ const dotenv = require('dotenv');
 
 dotenv.config();
 
+process.env.SEALION_CORE_DIR = path.resolve(__dirname, '..');
+
 const db = require('../lib/db');
 
 const testFn = require(path.join(__dirname, test));

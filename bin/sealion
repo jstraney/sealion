@@ -19,7 +19,7 @@ process.env.SEALION_CORE_DIR = __dirname.replace(/\/bin$/, '');
 dotenv.config();
 
 const {
-  sealionRequireClis,
+  sealionRequireCoreClis,
 } = require('../lib/sealion');
 
 (async () => {
@@ -29,7 +29,7 @@ const {
   const [command = 'help', ...subArgs] = args;
 
   // load all subcommand files so that hooks may be used.
-  const commandFns = sealionRequireClis();
+  const commandFns = sealionRequireCoreClis();
 
   if (!commandFns.hasOwnProperty(command)) {
     throw new Error(`unknown sealion command "${command}"`);
