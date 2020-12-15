@@ -1,0 +1,55 @@
+#!/usr/bin/env node
+
+const path = require('path');
+
+const
+{readdirAsync} = require('../lib/fs'),
+{execAsync} = require('../lib/child_process'),
+{camelCase} = require('../lib/util'),
+{invokeHook, invokeReduce} = require('../lib/hook');
+
+const
+commandLineArgs = require('command-line-args'),
+commandLineUsage = require('command-line-usage'),
+dotenv = require('dotenv'),
+requireDir = require('require-dir');
+
+process.env.SEALION_CORE_DIR = __dirname.replace(/\/bin$/, '');
+
+dotenv.config();
+
+const {
+  sealionRequireClis,
+} = require('../lib/sealion');
+
+(async () => {
+
+  const args = process.argv.slice(2);
+
+  const [command = 'help', ...subArgs] = args;
+
+  // load all subcommand files so that hooks may be used.
+  const commandFns = sealionRequireClis();
+
+  if (!commandFns.hasOwnProperty(command)) {
+    throw new Error(`unknown sealion command "${command}"`);
+  } else if (typeof commandFns[command] !== 'function') {
+    throw new Error(`sealion command file "${command}" must export a function`);
+  }
+
+  const commandNames = Object.keys(commandFns);
+
+  const definedOptions = await invokeReduce(`${camelCase(command)}DefineCliArgs`, []);
+
+  const sub = commandFns[command];
+
+  const parsedArgs = definedOptions.length
+    ? commandLineArgs(definedOptions, {argv: subArgs})
+    : {};
+
+  // fire hooks defined in command files
+  const result = await sub(parsedArgs, subArgs, commandNames);
+
+  console.log(result);
+
+})();
