@@ -1,15 +1,18 @@
+
+const chalk = require('chalk')
+
 const commandLineUsage = require('command-line-usage');
 
 const {
   implementReduce,
   invokeReduce,
-} = require('../lib/hook');
+} = require('@owo/lib/hook');
 
 const {
   camelCase,
-} = require('../lib/util');
+} = require('@owo/lib/string');
 
-implementReduce('cliHelp', (allHelp, commandNames) => ({
+implementReduce('cliHelp', (allHelp, owo, commandNames) => ({
   ...allHelp,
   help: {
     description: 'Sealion CLI help',
@@ -18,9 +21,35 @@ implementReduce('cliHelp', (allHelp, commandNames) => ({
   }
 }));
 
-module.exports = async (_, rawArgs = [], commandNames = []) => {
+// converts an option (as defined in command-line-args module) to
+// help text
+const optionToHelp = (optionDef) => {
 
-  const allHelp = await invokeReduce('cliHelp', {}, commandNames);
+  const {
+    name = 'undefined',
+    type = String,
+    multiple = false,
+    defaultOption = false,
+    defaultValue,
+    description = null,
+  } = optionDef;
+
+  return {
+    name,
+    typeLabel: `{underline ${type.name.toLowerCase()}}`,
+    description: [
+      description,
+      defaultOption ? 'default-option': null,
+      defaultValue !== undefined ? `default-value="${defaultValue}"` : null,
+      multiple ? 'multiple values': null,
+    ].filter((a) => a !== null).join(' ')
+  };
+
+}
+
+module.exports = async (owo, __, rawArgs = [], commandNames = []) => {
+
+  const allHelp = await invokeReduce('cliHelp', {}, owo, commandNames);
 
   // slice out token 'help'. so 'help entity create' or 'entity create help'
   // just returns 'entity create' and gets help on that topic
@@ -41,7 +70,7 @@ module.exports = async (_, rawArgs = [], commandNames = []) => {
   // build default header. allow description to be passed
   const relevantHelp = [
     {
-      header: `SEALION CLI - ${topic}`,
+      header: `Sealion CLI ºωº < ${topic}`,
       content: helpDef.description || 'no description',
     }
   ];
@@ -74,31 +103,29 @@ module.exports = async (_, rawArgs = [], commandNames = []) => {
   if (definedOptions.length) {
     relevantHelp.push({
       header: 'Options',
-      content: definedOptions.map((optionDef) => {
-
-        const {
-          name = 'undefined',
-          type = String,
-          multiple = false,
-          defaultOption = false,
-          defaultValue,
-          description = null,
-        } = optionDef;
-
-        return {
-          name,
-          typeLabel: `{underline ${type.name.toLowerCase()}}`,
-          description: [
-            description,
-            defaultOption ? 'default-option': null,
-            defaultValue !== undefined ? `default-value="${defaultValue}"` : null,
-            multiple ? 'multiple values': null,
-          ].filter((a) => a !== null).join(' ')
-        };
-
-      })
+      content: definedOptions.map(optionToHelp),
     })
   }
+
+  const coreArgs = await invokeReduce('sealionDefineCliArgs');
+
+  // define global options which should be passed to all commands
+  relevantHelp.push({
+    header: 'Global Options',
+    content: coreArgs.map(optionToHelp),
+  });
+
+  relevantHelp.push({
+    header: 'Community',
+    content: [
+      {name: 'contribute', description: 'https://github.com/jstraney/sealion/.github/CONTRIBUTING.md'},
+      // develop an org first with rules, core contributers, a board of
+      // trustees. We could have a registry for core contributers and
+      // split donations to the org.
+      // {name: 'Donate': 'Donate to sealion'},
+      {name: 'documentation', description:'https://github.com/jstraney/sealion/doc/README.md'},
+    ],
+  });
 
   return commandLineUsage(relevantHelp);
 

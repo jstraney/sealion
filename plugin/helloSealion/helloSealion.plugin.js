@@ -1,7 +1,6 @@
-const {
-  implementHook,
-} = require('../../lib/hook');
 
-module.exports = () => {
+module.exports = (owo) => {
+
+  return 'Hello Sealion!';
 
 };

@@ -7,7 +7,10 @@
     "sealion": "bin/sealion"
   },
   "scripts": {
-    "test": "node test"
+    "test": "sealion test --sealion"
+  },
+  "_moduleAliases": {
+    "@owo": "."
   },
   "author": "Jeff Straney",
   "license": "ISC",
@@ -19,19 +22,28 @@
     "command-line-args": "^5.1.1",
     "command-line-usage": "^6.1.1",
     "cookie-parser": "^1.4.5",
+    "dependency-graph": "^0.9.0",
     "dotenv": "^8.2.0",
+    "escape-string-regexp": "^4.0.0",
     "eventemitter3": "^4.0.7",
     "express": "^4.17.1",
+    "figlet": "^1.5.0",
     "helmet": "^4.2.0",
     "jsonwebtoken": "^8.5.1",
+    "jsum": "^0.1.4",
     "knex": "^0.21.12",
+    "module-alias": "^2.2.2",
     "mssql": "^6.2.3",
     "mysql": "^2.18.1",
     "mysql2": "^2.2.5",
     "pg": "^8.5.1",
     "pgsql": "^1.0.0",
+    "prompts": "^2.4.0",
+    "replace-in-file": "^6.1.0",
     "require-dir": "^1.2.0",
+    "sleep": "^6.3.0",
     "sqlite3": "^5.0.0",
+    "toposort": "^2.0.2",
     "winston": "^3.3.3",
     "winston-daily-rotate-file": "^4.5.0"
   },

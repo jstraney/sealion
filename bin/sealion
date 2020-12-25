@@ -1,55 +1,198 @@
 #!/usr/bin/env node
-
-const path = require('path');
+require('module-alias/register');
+require('@owo/lib/init');
 
 const
-{readdirAsync} = require('../lib/fs'),
-{execAsync} = require('../lib/child_process'),
-{camelCase} = require('../lib/util'),
-{invokeHook, invokeReduce} = require('../lib/hook');
+path = require('path');
 
 const
 commandLineArgs = require('command-line-args'),
-commandLineUsage = require('command-line-usage'),
-dotenv = require('dotenv'),
-requireDir = require('require-dir');
-
-process.env.SEALION_CORE_DIR = __dirname.replace(/\/bin$/, '');
+dotenv = require('dotenv');
 
 dotenv.config();
 
 const {
-  sealionRequireCoreClis,
-} = require('../lib/sealion');
+  getIfSet,
+} = require('@owo/lib/collection');
+
+const {
+  camelCase,
+  arrayToCamel,
+} = require('@owo/lib/string');
+
+const {
+  implementReduce,
+  implementHook,
+  invokeHook,
+  invokeReduce
+} = require('@owo/lib/hook');
+
+const {
+  suggestCliReducer,
+  getSubCommandSubArgs
+} = require('@owo/lib/cli');
+
+const logger = require('@owo/lib/logger')('@owo/bin/sealion');
+
+process.env.SEALION_CORE_DIR = __dirname.replace(/\/bin$/, '');
+
+const libDB = require('@owo/lib/db');
+
+const {
+  owoRequireCoreClis,
+} = require('@owo/lib/loader');
+
+const {
+  pluginBootstrap,
+} = require('@owo/lib/plugin');
+
+// global options
+implementReduce('sealionDefineCliArgs', () => [
+  { name: 'command', type: String, defaultOption: true },
+  { name: 'verbose', type: Boolean, defaultValue: false },
+  { name: 'owo-path', alias: 'r', type: String },
+]);
 
 (async () => {
 
+
   const args = process.argv.slice(2);
 
-  const [command = 'help', ...subArgs] = args;
+  // it is preferable to implement your own cli, but this could be
+  // used to add a cli argument that passes to all clis in the
+  // ecosystem.
+  const definedCoreArgs = await invokeReduce('sealionDefineCliArgs');
 
-  // load all subcommand files so that hooks may be used.
-  const commandFns = sealionRequireCoreClis();
+  const coreArgs = commandLineArgs(definedCoreArgs, {
+    argv: args,
+    stopAtFirstUnknown: true,
+  });
 
-  if (!commandFns.hasOwnProperty(command)) {
-    throw new Error(`unknown sealion command "${command}"`);
-  } else if (typeof commandFns[command] !== 'function') {
-    throw new Error(`sealion command file "${command}" must export a function`);
+  const {
+    command = 'help',
+    verbose = false,
+    'owo-path': owoPath,
+    _unknown: subArgs = []
+  } = coreArgs;
+
+  const fullArgs = [command, ...subArgs];
+
+  // TODO: implement true, dynamic gobal logging levels. this only presently changes
+  // the level of the current file...
+  if (verbose) {
+    logger.level = 'debug';
   }
 
-  const commandNames = Object.keys(commandFns);
+  // running a sealion app is tied into the CLI. sometimes we want to close
+  // the db pool when a command is done, but other times (like when
+  // sealion server up is called) we want to keep the pool alive
+  let keepSealionAlive = false;
 
-  const definedOptions = await invokeReduce(`${camelCase(command)}DefineCliArgs`, []);
+  implementHook('keepSealionAlive', () => {
+    logger.debug('hookKeepSealionAlive triggered');
+    keepSealionAlive = true
+  });
 
-  const sub = commandFns[command];
+  const owo = {
+    info: {},
+    lib: require('@owo/lib'),
+    cli: owoRequireCoreClis(),
+    plugin: {},
+  };
 
-  const parsedArgs = definedOptions.length
-    ? commandLineArgs(definedOptions, {argv: subArgs})
-    : {};
+  // here at sealion inc. we command fun
+  let commandFn;
 
-  // fire hooks defined in command files
-  const result = await sub(parsedArgs, subArgs, commandNames);
+  await pluginBootstrap(owo);
 
-  console.log(result);
+  const commandNames = Object.keys(owo.cli);
+
+  if (!owo.cli.hasOwnProperty(command)) {
+
+    logger.error(`sealion command "${command}" not recognized`);
+    libDB.destroyDBs();
+    return;
+
+  } else if (typeof owo.cli[command] !== 'function') {
+
+    logger.error(`sealion command file "${command}" must export a function`);
+    libDB.destroyDBs();
+    return;
+
+  }
+
+  commandFn = owo.cli[command];
+
+  const reducerSuggestion = await suggestCliReducer(fullArgs, {
+    suffix: 'DefineCliArgs'
+  }, owo);
+
+  let parsedArgs;
+
+  if (reducerSuggestion) {
+
+    // get the command option definitions per command
+    const definedOptions = await invokeReduce(reducerSuggestion, []);
+
+    // try to parse the args. if there is an error, most likely there
+    // is an unrecognized option. just stop at that point.
+    try {
+
+      // try to actual subArgs (in case a subCommand is implemented)
+      const nextSubArgs = getSubCommandSubArgs(reducerSuggestion, fullArgs);
+
+      // parse the args
+      parsedArgs = definedOptions.length
+        ? commandLineArgs(definedOptions, {argv: nextSubArgs, camelCase: true})
+        : {};
+
+      // example: you define a command with reducer myCommandDefineCliArgs
+      // you add another reducer myCommandFooDefineCliArgs
+      // you can ommit any requirement in your defined args for a 'subCommands'
+      // arg, define an arg with 'defaultOption: true' and still get
+      // a subCommands array containing ['foo']
+      if (!Object.hasOwnProperty(parsedArgs, 'subCommand')) {
+
+        // this assumes you do not want the first token in 'subCommands'
+        // following first example, 'myCommand' is ommitted
+        const sliceTo = fullArgs.length - nextSubArgs.length;
+
+        parsedArgs.subCommands = fullArgs.slice(1, sliceTo);
+
+      }
+
+    } catch (error) {
+
+      logger.level === 'debug'
+        ? logger.error('%o', error)
+        : logger.error('%s', error.message);
+
+      libDB.destroyDBs();
+
+      return;
+
+    }
+
+  } else {
+
+    parsedArgs = {};
+
+  }
+
+  try {
+
+    const result = await commandFn(owo, parsedArgs, subArgs, commandNames);
+
+    logger.info('%s', result);
+
+  } catch (error) {
+
+    logger.error('%o', error);
+
+  }
+
+  if (!keepSealionAlive) {
+    libDB.destroyDBs();
+  }
 
 })();

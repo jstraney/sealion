@@ -9,11 +9,9 @@ const {
   validate,
 } = require('../lib/validate');
 
-/*
 const {
-  mapAttribute,
-} = require('../lib/mapAttribute');
-*/
+  camelCase,
+} = require('../lib/util');
 
 const {
   BadRequestError,
@@ -38,21 +36,43 @@ const entityTypeInfoCache = {};
 // works a little differently from a conventional ResourceController
 class EntityController {
 
-  // cannot use a traditional constructor because they are not allowed
-  // to be async. The entity controller pulls its data from db on
-  // initialization
   constructor (name) {
 
-    this.name = name;
+    this.name = camelCase(name);
+
+    const actions = ['create', 'read', 'update', 'delete', 'search'];
 
     // implement cacheRebuild or something.
-    ['create', 'read', 'update', 'del', 'search'].forEach((action) => {
-      this[action] = this[action].bind(this);
+    actions.forEach((action) => {
+
+      const mappedAction = action === 'delete'
+        ? 'del'
+        : action;
+
+      this[mappedAction] = this[mappedAction].bind(this);
+
     });
 
   }
 
+  // unpacks id values from payload so that when something is updated
+  // we can retrieve the new record.
+  unpackIdKeys (args, entityTypeInfo) {
+    return entityTypeInfo.properties.reduce((keys, {isIdKey = false, propertyName}) => {
+      return isIdKey && args.hasOwnProperty(propertyName)
+        ? {...keys, [propertyName]: args[propertyName] }
+        : keys;
+    }, {});
+  }
+
+  getLastInsert(args = {}) {
+    const where = this.upackIdKeys(args);
+    return this.read(where);
+  }
+
   async create( args = {} ) {
+
+    logger.info(`creating ${this.name} entity: rawArgs %o`, args);
 
     const {
       fields = {},
@@ -70,19 +90,28 @@ class EntityController {
 
     const { name: entityTypeName } = entityTypeInfo;
 
-    const [ tableArgs = {}, tableArgs2 = {} ] = await invokeReduce([
+    const [ tableArgs1 = {}, tableArgs2 = {} ] = await invokeReduce([
       `entityCreateTableArgs`,
       `${this.name}EntityCreateTableArgs`,
     ], properties);
 
+    const tableArgs = {...tableArgs1, tableArgs2};
+
     const [ id ] = await db(entityTypeName)
       .returning('id')
       .insert({
-        ...tableArgs,
+        ...tableArgs1,
         ...tableArgs2,
       });
 
-    const result = await this.read({id});
+    await invokeHook([
+      `entityCreate`,
+      `${this.name}EntityCreate`,
+    ], args, tableArgs);
+
+    const result = await this.getLastInsert({id, ...args});
+
+    logger.info(`created ${this.name} entity: %o`, result);
 
     // TODO: implement fields
     // fieldController.create();
@@ -91,6 +120,8 @@ class EntityController {
   }
 
   async read( args = {} ) {
+
+    logger.info(`reading ${this.name} entity: rawArgs %o`, args);
 
     const entityTypeInfo = await EntityController.getEntityTypeInfo(this.name);
 
@@ -101,22 +132,28 @@ class EntityController {
 
     const { name: entityTypeName} = entityTypeInfo;
 
-    const [ tableArgs = {}, tableArgs2 = {} ] = await invokeReduce([
+    const [ tableArgs1 = {}, tableArgs2 = {} ] = await invokeReduce([
       `entityReadTableArgs`,
       `${this.name}EntityReadTableArgs`,
     ], args);
 
-    const result = await db(entityTypeName)
-      .where({
-        ...tableArgs,
-        ...tableArgs2,
-      });
+    const tableArgs = {...tableArgs1, ...tableArgs2};
+
+    const [ result = null ] = await db(entityTypeName)
+      .where(tableArgs)
+
+    await invokeHook([
+      `entityRead`,
+      `${this.name}EntityRead`,
+    ], args, tableArgs);
 
     return invokeReduce(`entityReadResult`, result, entityTypeInfo);
 
   }
 
   async update( args = {} ) {
+
+    logger.info(`updating ${this.name} entity: rawArgs %o`, args);
 
     const entityTypeInfo = await EntityController.getEntityTypeInfo(this.name);
 
@@ -127,25 +164,41 @@ class EntityController {
 
     const { name: entityTypeName} = entityTypeInfo;
 
-    const { id, fields = {}, ...setProperties} = args;
+    const { fields = {}, ...setProperties} = args;
 
-    const [ tableArgs = {}, tableArgs2 = {} ] = await invokeReduce([
+    const [ tableArgs1 = {}, tableArgs2 = {} ] = await invokeReduce([
       `entityUpdateTableArgs`,
       `${this.name}EntityUpdateTableArgs`,
     ], setProperties);
 
-    const result = await db(entityTypeName)
-      .update({
-        ...tableArgs,
-        ...tableArgs2,
-      })
-      .where({id});
+    const tableArgs = {...tableArgs1, ...tableArgs2};
+
+    // unpack identifiers
+    const whereArgs = this.unpackIdKeys(tableArgs);
+
+    // delete identifiers from payload (assumed primary keys)
+    for (key in whereArgs) {
+      delete tableArgs[key];
+    }
+
+    await db(entityTypeName)
+      .update(tableArgs)
+      .where(whereArgs);
+
+    await invokeHook([
+      `entityUpdate`,
+      `${this.name}EntityUpdate`,
+    ], rawArgs, tableArgs);
+
+    const result = this.getLastInsert(tableArgs);
 
     return invokeReduce(`entityUpdateResult`, result, entityTypeInfo);
 
   }
 
   async del( args = {} ) {
+
+    logger.info(`deleting %s entity: rawArgs %o`, this.name, args);
 
     const entityTypeInfo = await EntityController.getEntityTypeInfo(this.name);
 
@@ -156,23 +209,31 @@ class EntityController {
 
     const { name: entityTypeName} = entityTypeInfo;
 
-    const [ tableArgs = {}, tableArgs2 = {} ] = await invokeReduce([
+    const [ tableArgs1 = {}, tableArgs2 = {} ] = await invokeReduce([
       `entityDeleteTableArgs`,
       `${this.name}EntityDeleteTableArgs`,
     ], args);
 
+    const tableArgs = {...tableArgs1, ...tableArgs2};
+
     const numRows = await db(entityTypeName)
       .del()
-      .where({
-        ...tableArgs,
-        ...tableArgs2,
-      });
+      .where(tableArgs);
+
+    logger.info(`deleted %s %s entities`, numRows, this.name);
+
+    await invokeHook([
+      `entityDelete`,
+      `${this.name}EntityDelete`,
+    ], numRows, rawArgs, tableArgs);
 
     return invokeReduce(`entityDeleteResult`, { numRows }, entityTypeInfo);
 
   }
 
   async search( args = {} ) {
+
+    logger.info(`searching %s entity: rawArgs %o`, this.name, args);
 
     const entityTypeInfo = await EntityController.getEntityTypeInfo(this.name);
 
@@ -181,20 +242,35 @@ class EntityController {
       `${this.name}EntityInvalidateSearch`
     ], args, entityTypeInfo);
 
-    const [ tableArgs = {}, tableArgs2 = {}] = await invokeReduce([
+    const [ tableArgs1 = {}, tableArgs2 = {}] = await invokeReduce([
       `entitySearchTableArgs`,
       `${this.name}SearchTableArgs`,
     ], args);
 
-    // TODO: implement field queries
-    /* const result = await fieldController.search({
-     *   entityTypeName,
-     *   bundle,
-     *   fields,
-     * });
-     */
+    const tableArgs = {...tableArgs1, ...tableArgs2};
 
-    const result = []
+    const {
+      limit = 10,
+      offset = 0,
+      ...tableArgsSansLimit
+    } = tableArgs;
+
+    const query = db(this.name)
+      .where(tableArgsSansLimit)
+
+    // TODO: implement field queries for fieldable entities
+    const result = limit !== null
+      ? (await query
+          .limit(limit)
+          .offset(offset))
+      : await query;
+
+    logger.info(`search results for ${this.name}: %o`, result);
+
+    await invokeHook([
+      `entitySearch`,
+      `${this.name}Search`,
+    ], result, rawArgs, tableArgs);
 
     return invokeReduce(`entitySearchResult`, result, entityTypeInfo);
 
@@ -243,7 +319,17 @@ class EntityController {
   // to caching in which updates/deletes invalidate the read/search
   // cache. caching will deserve its own API though
   static async getEntityTypeInfo(name) {
-    return entityTypeController.read({name});
+
+    const entityType = await db('entityType').where({name});
+
+    entityType.properties = await db('entityTypeProperty')
+      .where({entityTypeName: name});
+
+    entityType.bundles = await db('entityTypeBundle')
+      .where({entityTypeName: name});
+
+    return entityType;
+
   }
 
   // this is used for post/put, create/update because those

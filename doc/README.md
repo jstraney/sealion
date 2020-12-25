@@ -19,14 +19,16 @@ npm i -g sealion
 # initialize a new project
 sealion init --sqlite3 my-project
 
-cd my-project && sealion migrate up -m install
+cd my-project && sealion install
 
 # run to get help
-sealion help
+sealion help init
 
 ```
 
-See writing your first sealion plugin for help
+See [Installing Sealion](doc/how-to/install.md) for more details
+
+See [writing your first sealion plugin](doc/how-to/first-plugin.md) for help
 
 ## Project Goals
 
